@@ -423,21 +423,51 @@ class StanleyCupPredictor:
         return sim_df.sort_values(by='champion', ascending=False)
 
     def visualize_bracket(self, simulation_results):
-        """Create a visualization of the predicted playoff bracket"""
-        # This would create a visual representation of the predicted bracket
-        # For simplicity, we'll just show the championship probabilities
+        """
+        Create a visualization of the predicted playoff bracket
 
-        top_teams = simulation_results.sort_values(by='champion_pct', ascending=False).head(8)
+        Parameters:
+        - simulation_results: DataFrame with simulation results
 
-        plt.figure(figsize=(10, 6))
-        sns.barplot(x='champion_pct', y='team', data=top_teams)
-        plt.title('Stanley Cup Championship Probability (%)')
-        plt.xlabel('Probability (%)')
-        plt.ylabel('Team')
-        plt.tight_layout()
+        Returns:
+        - None (saves visualization file)
+        """
+        try:
+            # Set the backend to a non-GUI backend to avoid issues
+            import matplotlib
+            matplotlib.use('Agg')  # Use non-interactive backend
 
-        # In a real application, you would save this figure or display it
-        # plt.savefig('stanley_cup_predictions.png')
+            # Get top teams for visualization
+            top_teams = simulation_results.sort_values(by='champion_pct', ascending=False).head(8)
+
+            # Create figure and plot
+            plt.figure(figsize=(10, 6))
+            bars = sns.barplot(x='champion_pct', y='team', data=top_teams)
+
+            # Add value labels to the bars
+            for i, v in enumerate(top_teams['champion_pct']):
+                plt.text(v + 0.5, i, f"{v:.1f}%", va='center')
+
+            # Add titles and labels
+            plt.title('Stanley Cup Championship Probability (%)')
+            plt.xlabel('Probability (%)')
+            plt.ylabel('Team')
+            plt.tight_layout()
+
+            # Save figure instead of displaying it
+            plt.savefig('stanley_cup_predictions.png')
+            print(f"Visualization saved to 'stanley_cup_predictions.png'")
+            plt.close()
+
+        except Exception as e:
+            print(f"Warning: Could not create visualization: {e}")
+            print("Continuing without visualization...")
+
+            # Print the top teams instead
+            top_teams = simulation_results.sort_values(by='champion_pct', ascending=False).head(8)
+            print("\nTop Stanley Cup contenders:")
+            for i, row in top_teams.iterrows():
+                print(f"{row['team']}: {row['champion_pct']:.1f}%")
 
     def fetch_player_stats(self, season=2024):
         """
