@@ -318,6 +318,17 @@ class StanleyCupPredictor:
         Returns:
         - DataFrame with playoff predictions
         """
+        # Add missing columns that would be in the historical data
+        # but aren't in the current season data since playoffs haven't happened yet
+        if 'made_playoffs' not in current_season_data.columns:
+            current_season_data['made_playoffs'] = 0
+
+        if 'playoff_rounds' not in current_season_data.columns:
+            current_season_data['playoff_rounds'] = 0
+
+        if 'won_cup' not in current_season_data.columns:
+            current_season_data['won_cup'] = 0
+
         # Engineer features from current season data
         X_current, _ = self.engineer_features(current_season_data)
 
@@ -326,6 +337,7 @@ class StanleyCupPredictor:
         for col in missing_cols:
             X_current[col] = 0
 
+        # Ensure columns are in the same order
         X_current = X_current[self.features.columns]
 
         # Scale features
@@ -341,7 +353,10 @@ class StanleyCupPredictor:
 
         # Add probabilities for each outcome
         for i in range(self.model.classes_.max() + 1):
-            results[f'prob_round_{i}'] = probabilities[:, i] if i < len(self.model.classes_) else 0
+            if i < probabilities.shape[1]:  # Check if the class exists in probabilities
+                results[f'prob_round_{i}'] = probabilities[:, i]
+            else:
+                results[f'prob_round_{i}'] = 0
 
         # Sort by predicted playoff performance
         results = results.sort_values(by=['predicted_playoff_rounds', 'points'], ascending=False)
