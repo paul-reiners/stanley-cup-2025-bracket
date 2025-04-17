@@ -10,6 +10,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
 
+# Additional imports for player data
+from concurrent.futures import ThreadPoolExecutor
+import time
+
 
 class StanleyCupPredictor:
     def __init__(self):
@@ -19,9 +23,16 @@ class StanleyCupPredictor:
         self.features = None
         self.target = None
 
+        # NHL API base URLs
+        self.nhl_api_url = "https://api.nhle.com/stats/rest/en"
+        self.nhl_web_api_url = "https://api-web.nhle.com"
+
+        # For rate limiting API requests
+        self.request_delay = 0.5  # seconds between requests to avoid hitting rate limits
+
     def fetch_historical_data(self, start_season=2010, end_season=2024):
         """
-        Fetch historical NHL data from the NHL API or a similar source
+        Fetch historical NHL data from the NHL API
 
         Parameters:
         - start_season: First season to include (start year)
@@ -35,24 +46,85 @@ class StanleyCupPredictor:
         for season in range(start_season, end_season + 1):
             season_str = f"{season}{season + 1}"
 
-            # This is a placeholder - you'd need to use the actual NHL API endpoints
-            # Example URL for NHL API (update with correct endpoints)
-            url = f"https://statsapi.web.nhl.com/api/v1/teams?season={season_str}"
+            # Use the NHL API endpoint for team stats
+            # NHL API uses format 20232024 for the 2023-2024 season
+            url = f"https://api.nhle.com/stats/rest/en/team/summary"
+            params = {
+                'sort': 'points',
+                'cayenneExp': f'seasonId={season_str} and gameTypeId=2'  # Regular season games
+            }
 
             try:
-                # In a real application, you would fetch the actual data
-                # response = requests.get(url)
-                # data = response.json()
+                # Fetch the actual data
+                response = requests.get(url, params=params)
 
-                # For demonstration, we'll create synthetic data
-                data = self._generate_synthetic_data(season, 32)  # 32 NHL teams
-                all_data.extend(data)
+                # Check if request was successful
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # Process the data from the API
+                    if 'data' in data:
+                        for team_data in data['data']:
+                            # Convert API data to our format
+                            team_record = {
+                                'season': season,
+                                'team': team_data.get('teamFullName', ''),
+                                'wins': team_data.get('wins', 0),
+                                'losses': team_data.get('losses', 0),
+                                'ot_losses': team_data.get('otLosses', 0),
+                                'points': team_data.get('points', 0),
+                                'goal_differential': team_data.get('goalDifferential', 0),
+                                'powerplay_percentage': team_data.get('powerPlayPct', 0),
+                                'penalty_kill_percentage': team_data.get('penaltyKillPct', 0)
+                            }
+
+                            # Add playoff data (need to fetch from another endpoint or determine from standings)
+                            # For now, we'll estimate based on points (top 16 teams make playoffs)
+                            team_record['made_playoffs'] = 0  # Will be set later
+                            team_record['playoff_rounds'] = 0  # Will be set later
+                            team_record['won_cup'] = 0  # Will be set later
+
+                            all_data.append(team_record)
+                else:
+                    print(f"Error: API returned status code {response.status_code} for season {season_str}")
+                    # Fall back to synthetic data if the API fails
+                    fallback_data = self._generate_synthetic_data(season, 32)
+                    all_data.extend(fallback_data)
+                    print(f"Using synthetic data for season {season_str}")
 
             except Exception as e:
                 print(f"Error fetching data for season {season_str}: {e}")
+                # Fall back to synthetic data if the API fails
+                fallback_data = self._generate_synthetic_data(season, 32)
+                all_data.extend(fallback_data)
+                print(f"Using synthetic data for season {season_str}")
 
         # Convert to DataFrame
         df = pd.DataFrame(all_data)
+
+        # Determine playoff teams (top 16 in points each season)
+        for season in range(start_season, end_season + 1):
+            season_teams = df[df['season'] == season].sort_values(by='points', ascending=False)
+            playoff_teams_indices = season_teams.head(16).index
+
+            # Mark playoff teams
+            df.loc[playoff_teams_indices, 'made_playoffs'] = 1
+
+            # Simulate or fetch playoff rounds advancement
+            # For demonstration, we'll simulate this based on regular season performance
+            round_advancements = {
+                'round1': playoff_teams_indices[:8],  # Top 8 advance to round 2
+                'round2': playoff_teams_indices[:4],  # Top 4 advance to conf finals
+                'round3': playoff_teams_indices[:2],  # Top 2 advance to finals
+                'champion': playoff_teams_indices[:1]  # Champion
+            }
+
+            df.loc[round_advancements['round1'], 'playoff_rounds'] = 2
+            df.loc[round_advancements['round2'], 'playoff_rounds'] = 3
+            df.loc[round_advancements['round3'], 'playoff_rounds'] = 4
+            df.loc[round_advancements['champion'], 'playoff_rounds'] = 5
+            df.loc[round_advancements['champion'], 'won_cup'] = 1
+
         return df
 
     def _generate_synthetic_data(self, season, num_teams):
@@ -102,10 +174,61 @@ class StanleyCupPredictor:
         return data
 
     def fetch_current_season_data(self, season=2024):
-        """Fetch data for the current season to make predictions"""
-        # Similar to fetch_historical_data but only for current season
-        # In a real app, you would fetch real-time data
-        return pd.DataFrame(self._generate_synthetic_data(season, 32))
+        """
+        Fetch data for the current season to make predictions
+
+        Parameters:
+        - season: Current season (start year)
+
+        Returns:
+        - DataFrame with current season team data
+        """
+        season_str = f"{season}{season + 1}"
+
+        # NHL API endpoint for current team stats
+        url = f"https://api.nhle.com/stats/rest/en/team/summary"
+        params = {
+            'sort': 'points',
+            'cayenneExp': f'seasonId={season_str} and gameTypeId=2'  # Regular season games
+        }
+
+        try:
+            # Fetch the actual data
+            response = requests.get(url, params=params)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                current_data = []
+                if 'data' in data:
+                    for team_data in data['data']:
+                        team_record = {
+                            'season': season,
+                            'team': team_data.get('teamFullName', ''),
+                            'wins': team_data.get('wins', 0),
+                            'losses': team_data.get('losses', 0),
+                            'ot_losses': team_data.get('otLosses', 0),
+                            'points': team_data.get('points', 0),
+                            'goal_differential': team_data.get('goalDifferential', 0),
+                            'powerplay_percentage': team_data.get('powerPlayPct', 0),
+                            'penalty_kill_percentage': team_data.get('penaltyKillPct', 0),
+                            # Additional advanced stats if available
+                            'shots_for_per_game': team_data.get('shotsForPerGame', 0),
+                            'shots_against_per_game': team_data.get('shotsAgainstPerGame', 0),
+                            'faceoff_win_percentage': team_data.get('faceoffWinPct', 0)
+                        }
+                        current_data.append(team_record)
+
+                return pd.DataFrame(current_data)
+            else:
+                print(f"Error: API returned status code {response.status_code}")
+                # Fall back to synthetic data if the API fails
+                return pd.DataFrame(self._generate_synthetic_data(season, 32))
+
+        except Exception as e:
+            print(f"Error fetching current season data: {e}")
+            # Fall back to synthetic data if the API fails
+            return pd.DataFrame(self._generate_synthetic_data(season, 32))
 
     def engineer_features(self, data):
         """
@@ -301,32 +424,169 @@ class StanleyCupPredictor:
         # In a real application, you would save this figure or display it
         # plt.savefig('stanley_cup_predictions.png')
 
+    def fetch_player_stats(self, season=2024):
+        """
+        Fetch player statistics for a given season
+
+        Parameters:
+        - season: Season to fetch (start year)
+
+        Returns:
+        - DataFrame with player statistics
+        """
+        season_str = f"{season}{season + 1}"
+
+        # NHL API endpoint for skater stats
+        url = f"{self.nhl_api_url}/skater/summary"
+
+        # Parameters for the request
+        params = {
+            'sort': '[{"property":"points","direction":"DESC"}]',
+            'start': 0,
+            'limit': 100,  # Get top 100 players
+            'factCayenneExp': 'gamesPlayed>=20',  # Only players with at least 20 games
+            'cayenneExp': f'seasonId={season_str} and gameTypeId=2'  # Regular season games
+        }
+
+        try:
+            # Fetch the data
+            response = requests.get(url, params=params)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                player_data = []
+                if 'data' in data:
+                    for player in data['data']:
+                        player_record = {
+                            'player_id': player.get('playerId', 0),
+                            'player_name': player.get('skaterFullName', ''),
+                            'team': player.get('teamAbbrevs', ''),
+                            'position': player.get('positionCode', ''),
+                            'games_played': player.get('gamesPlayed', 0),
+                            'goals': player.get('goals', 0),
+                            'assists': player.get('assists', 0),
+                            'points': player.get('points', 0),
+                            'plus_minus': player.get('plusMinus', 0),
+                            'penalty_minutes': player.get('penaltyMinutes', 0),
+                            'time_on_ice_per_game': player.get('timeOnIcePerGame', 0),
+                            'shots': player.get('shots', 0),
+                            'shooting_pct': player.get('shootingPct', 0),
+                        }
+                        player_data.append(player_record)
+
+                return pd.DataFrame(player_data)
+            else:
+                print(f"Error: API returned status code {response.status_code}")
+                return pd.DataFrame()  # Return empty DataFrame on error
+
+        except Exception as e:
+            print(f"Error fetching player stats: {e}")
+            return pd.DataFrame()  # Return empty DataFrame on error
+
+    def fetch_goalie_stats(self, season=2024):
+        """
+        Fetch goalie statistics for a given season
+
+        Parameters:
+        - season: Season to fetch (start year)
+
+        Returns:
+        - DataFrame with goalie statistics
+        """
+        season_str = f"{season}{season + 1}"
+
+        # NHL API endpoint for goalie stats
+        url = f"{self.nhl_api_url}/goalie/summary"
+
+        # Parameters for the request
+        params = {
+            'sort': '[{"property":"wins","direction":"DESC"}]',
+            'start': 0,
+            'limit': 50,  # Get top 50 goalies
+            'factCayenneExp': 'gamesPlayed>=10',  # Only goalies with at least 10 games
+            'cayenneExp': f'seasonId={season_str} and gameTypeId=2'  # Regular season games
+        }
+
+        try:
+            # Fetch the data
+            response = requests.get(url, params=params)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                goalie_data = []
+                if 'data' in data:
+                    for goalie in data['data']:
+                        goalie_record = {
+                            'goalie_id': goalie.get('goalieId', 0),
+                            'goalie_name': goalie.get('goalieFullName', ''),
+                            'team': goalie.get('teamAbbrevs', ''),
+                            'games_played': goalie.get('gamesPlayed', 0),
+                            'wins': goalie.get('wins', 0),
+                            'losses': goalie.get('losses', 0),
+                            'overtime_losses': goalie.get('otLosses', 0),
+                            'save_percentage': goalie.get('savePct', 0),
+                            'goals_against_avg': goalie.get('goalsAgainstAverage', 0),
+                            'shutouts': goalie.get('shutouts', 0),
+                        }
+                        goalie_data.append(goalie_record)
+
+                return pd.DataFrame(goalie_data)
+            else:
+                print(f"Error: API returned status code {response.status_code}")
+                return pd.DataFrame()  # Return empty DataFrame on error
+
+        except Exception as e:
+            print(f"Error fetching goalie stats: {e}")
+            return pd.DataFrame()  # Return empty DataFrame on error
+
     def run_full_prediction(self):
         """Run the entire prediction pipeline"""
         # 1. Fetch historical data
+        print("Fetching historical team data...")
         historical_data = self.fetch_historical_data()
 
         # 2. Engineer features
+        print("Engineering features...")
         X, y = self.engineer_features(historical_data)
         self.features = X
         self.target = y
 
         # 3. Train model
+        print("Training model...")
         self.train_model(X, y)
 
         # 4. Get current season data
+        print("Fetching current season team data...")
         current_data = self.fetch_current_season_data()
 
-        # 5. Make playoff predictions
+        # 5. Enhance with player data (optional)
+        try:
+            print("Fetching player statistics...")
+            player_data = self.fetch_player_stats()
+            goalie_data = self.fetch_goalie_stats()
+
+            # Here you could integrate player/goalie data with team data
+            # This would enhance your model's predictive power
+            print(f"Retrieved data for {len(player_data)} players and {len(goalie_data)} goalies")
+        except Exception as e:
+            print(f"Warning: Could not fetch player data: {e}")
+            print("Continuing with team data only...")
+
+        # 6. Make playoff predictions
+        print("Making playoff predictions...")
         playoff_predictions = self.predict_playoffs(current_data)
 
-        # 6. Select playoff teams (top 16)
+        # 7. Select playoff teams (top 16)
         playoff_teams = playoff_predictions.head(16)
 
-        # 7. Simulate playoff bracket
+        # 8. Simulate playoff bracket
+        print("Simulating playoff bracket...")
         bracket_results = self.simulate_playoff_bracket(playoff_teams)
 
-        # 8. Visualize results
+        # 9. Visualize results
+        print("Generating visualization...")
         self.visualize_bracket(bracket_results)
 
         return {
@@ -339,6 +599,12 @@ class StanleyCupPredictor:
 if __name__ == "__main__":
     # Create predictor
     predictor = StanleyCupPredictor()
+
+    # Get API information
+    print("NHL API Information:")
+    print(f"Stats API Base URL: {predictor.nhl_api_url}")
+    print(f"Web API Base URL: {predictor.nhl_web_api_url}")
+    print("\nFetching data from NHL API...")
 
     # Run prediction pipeline
     results = predictor.run_full_prediction()
