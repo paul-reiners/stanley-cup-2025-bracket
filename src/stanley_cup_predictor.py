@@ -1,18 +1,15 @@
-import pandas as pd
-import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-import requests
-import json
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import requests
 import seaborn as sns
-from datetime import datetime
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
 
 # Additional imports for player data
-from concurrent.futures import ThreadPoolExecutor
-import time
 
 
 class StanleyCupPredictor:
@@ -29,6 +26,12 @@ class StanleyCupPredictor:
 
         # For rate limiting API requests
         self.request_delay = 0.5  # seconds between requests to avoid hitting rate limits
+
+        self.play_off_teams = \
+            ['St. Louis Blues', 'Winnipeg Jets', 'Ottawa Senators', 'Toronto Maple Leafs', 'Florida Panthers',
+             'Tampa Bay Lightning', 'Montréal Canadiens', 'Washington Capitals', 'New Jersey Devils',
+             'Carolina Hurricanes', 'Colorado Avalanche', 'Dallas Stars', 'Minnesota Wild', 'Vegas Golden Knights',
+             'Edmonton Oilers', 'Los Angeles Kings']
 
     def fetch_historical_data(self, start_season=2010, end_season=2024):
         """
@@ -66,23 +69,20 @@ class StanleyCupPredictor:
                     if 'data' in data:
                         for team_data in data['data']:
                             # Convert API data to our format
-                            team_record = {
-                                'season': season,
-                                'team': team_data.get('teamFullName', ''),
-                                'wins': team_data.get('wins', 0),
-                                'losses': team_data.get('losses', 0),
-                                'ot_losses': team_data.get('otLosses', 0),
-                                'points': team_data.get('points', 0),
-                                'goal_differential': team_data.get('goalDifferential', 0),
-                                'powerplay_percentage': team_data.get('powerPlayPct', 0),
-                                'penalty_kill_percentage': team_data.get('penaltyKillPct', 0)
-                            }
+                            team_full_name = team_data.get('teamFullName', '')
+                            if team_full_name not in self.play_off_teams:
+                                continue
+                            team_record = {'season': season, 'team': team_full_name,
+                                           'wins': team_data.get('wins', 0), 'losses': team_data.get('losses', 0),
+                                           'ot_losses': team_data.get('otLosses', 0),
+                                           'points': team_data.get('points', 0),
+                                           'goal_differential': team_data.get('goalDifferential', 0),
+                                           'powerplay_percentage': team_data.get('powerPlayPct', 0),
+                                           'penalty_kill_percentage': team_data.get('penaltyKillPct', 0),
+                                           'made_playoffs': 0, 'playoff_rounds': 0, 'won_cup': 0}
 
                             # Add playoff data (need to fetch from another endpoint or determine from standings)
                             # For now, we'll estimate based on points (top 16 teams make playoffs)
-                            team_record['made_playoffs'] = 0  # Will be set later
-                            team_record['playoff_rounds'] = 0  # Will be set later
-                            team_record['won_cup'] = 0  # Will be set later
 
                             all_data.append(team_record)
                 else:
@@ -127,7 +127,8 @@ class StanleyCupPredictor:
 
         return df
 
-    def _generate_synthetic_data(self, season, num_teams):
+    @staticmethod
+    def _generate_synthetic_data(season, num_teams):
         """Generate synthetic data for demonstration purposes"""
         teams = [f"Team_{i}" for i in range(1, num_teams + 1)]
         data = []
@@ -202,9 +203,12 @@ class StanleyCupPredictor:
                 current_data = []
                 if 'data' in data:
                     for team_data in data['data']:
+                        team_full_name = team_data.get('teamFullName', '')
+                        if team_full_name not in self.play_off_teams:
+                            continue
                         team_record = {
                             'season': season,
-                            'team': team_data.get('teamFullName', ''),
+                            'team': team_full_name,
                             'wins': team_data.get('wins', 0),
                             'losses': team_data.get('losses', 0),
                             'ot_losses': team_data.get('otLosses', 0),
@@ -230,7 +234,8 @@ class StanleyCupPredictor:
             # Fall back to synthetic data if the API fails
             return pd.DataFrame(self._generate_synthetic_data(season, 32))
 
-    def engineer_features(self, data):
+    @staticmethod
+    def engineer_features(data):
         """
         Create features for the model from raw NHL data
 
@@ -247,7 +252,7 @@ class StanleyCupPredictor:
         # Calculate additional features
         features['win_percentage'] = features['wins'] / (features['wins'] + features['losses'] + features['ot_losses'])
         features['points_percentage'] = features['points'] / (
-                    2 * (features['wins'] + features['losses'] + features['ot_losses']))
+                2 * (features['wins'] + features['losses'] + features['ot_losses']))
 
         # Calculate team momentum (improvement from previous season)
         # In a real app, you would calculate this properly
@@ -363,7 +368,8 @@ class StanleyCupPredictor:
 
         return results
 
-    def simulate_playoff_bracket(self, playoff_teams, num_simulations=1000):
+    @staticmethod
+    def simulate_playoff_bracket(playoff_teams, num_simulations=1000):
         """
         Simulate the entire playoff bracket using Monte Carlo simulation
 
@@ -422,7 +428,8 @@ class StanleyCupPredictor:
 
         return sim_df.sort_values(by='champion', ascending=False)
 
-    def visualize_bracket(self, simulation_results):
+    @staticmethod
+    def visualize_bracket(simulation_results):
         """
         Create a visualization of the predicted playoff bracket
 
@@ -438,11 +445,11 @@ class StanleyCupPredictor:
             matplotlib.use('Agg')  # Use non-interactive backend
 
             # Get top teams for visualization
-            top_teams = simulation_results.sort_values(by='champion_pct', ascending=False).head(8)
+            top_teams = simulation_results.sort_values(by='champion_pct', ascending=False)
 
             # Create figure and plot
             plt.figure(figsize=(10, 6))
-            bars = sns.barplot(x='champion_pct', y='team', data=top_teams)
+            sns.barplot(x='champion_pct', y='team', data=top_teams)
 
             # Add value labels to the bars
             for i, v in enumerate(top_teams['champion_pct']):
